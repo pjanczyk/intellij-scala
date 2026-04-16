@@ -5,7 +5,7 @@ import com.intellij.openapi.externalSystem.ExternalSystemModulePropertyManager
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.roots.impl.libraries.LibraryEx
 import com.intellij.openapi.roots.libraries.Library
-import com.intellij.openapi.roots.{OrderEnumerator, OrderRootType, libraries}
+import com.intellij.openapi.roots.{LibraryOrderEntry, OrderEntry, OrderEnumerator, OrderRootType, libraries}
 import com.intellij.openapi.util.io.JarUtil.getJarAttribute
 import com.intellij.openapi.util.{Key, ModificationTracker}
 import com.intellij.openapi.vfs.VirtualFile
@@ -240,17 +240,24 @@ object ScalaModuleSettings {
       forSbtBuildModule(module)
     }
     else {
-      val processor: FindProcessor[libraries.Library] = _.isScalaSdk
+      var scalaVersionProvider: Option[ScalaVersionProvider] = None
       OrderEnumerator.orderEntries(module)
         .librariesOnly
-        .forEachLibrary(processor)
-      val scalaSdk = processor.getFoundValue.asInstanceOf[LibraryEx]
-
-      val scalaVersionProviderFromScalaSdk = Option(scalaSdk).map(ScalaVersionProvider.FromScalaSdk)
-      val scalaVersionProvider: Option[ScalaVersionProvider] = scalaVersionProviderFromScalaSdk.orElse {
-        val lightTestsScalaVersion = Option(module.getUserData(TestUtils.LightTestScalaVersion))
-        lightTestsScalaVersion.map(v => ScalaVersionProvider.Explicit(v.languageLevel, Some(v.minor)))
-      }
+        .forEach {
+          case libraryOrderEntry: LibraryOrderEntry =>
+            if (Option(libraryOrderEntry.getLibrary).exists(_.isScalaSdk)) {
+              val library = libraryOrderEntry.getLibrary.asInstanceOf[LibraryEx]
+              scalaVersionProvider = Some(ScalaVersionProvider.FromScalaSdk(library))
+              false
+            } else if (Option(libraryOrderEntry.getLibraryName).exists(_.startsWith("Bazel: scala-sdk-"))) {
+              val scalaVersion = libraryOrderEntry.getLibraryName.stripPrefix("Bazel: scala-sdk-")
+              scalaVersionProvider = Some(ScalaVersionProvider.fromFullVersion(scalaVersion))
+              false
+            } else {
+              true
+            }
+          case _ => true
+        }
       scalaVersionProvider.map(new ScalaModuleSettings(module, isBuildModule = false, _))
     }
   }
